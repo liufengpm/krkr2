@@ -1,6 +1,13 @@
-// SDL2 desktop entry point — traditional main() loop
-#include <SDL2/SDL.h>
-#include <GL/glew.h>
+#define SDL_MAIN_USE_CALLBACKS
+#include "SDL3/SDL.h"
+#include "SDL3/SDL_main.h"
+#include "SDL3/SDL_init.h"
+#ifdef _KRKRSDL3_GL
+#include "glad/glad.h"
+#else
+#include "glad/glad_egl.h"
+#include <GLES3/gl32.h>
+#endif
 
 #include <map>
 #include <vector>
@@ -8,8 +15,6 @@
 #include "TVPApplication.h"
 #include "RenderManager.h"
 #include "MainWindowLayer.h"
-#include "tjsError.h"
-#include "tjsCommHead.h"
 
 #include "eventCallbackFun.h"
 
@@ -19,113 +24,71 @@
 #endif
 #endif
 
-// Windows <windows.h> defines GetMessage as GetMessageA/W — undo it
-#ifdef GetMessage
-#undef GetMessage
-#endif
-
 SDL_Window* tvp_window;
 static SDL_GLContext tvp_glContext = NULL;
 
-// forward declarations
-static void sdl_process_events(bool& running);
-void sdl_render_frame();
-
-int main(int argc, char* argv[])
+SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 {
-    SDL_SetMainReady();
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0)
-    {
-        SDL_Log("Fail to initialize SDL: %s", SDL_GetError());
-        return 1;
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO))
+    { // for format converter
+        SDL_Log("Fail to initialize SDL.");
+        return SDL_APP_FAILURE;
     }
 
     // 窗口
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_PropertiesID props = SDL_CreateProperties();
+    SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, "TVP Engine");
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, SDL_WINDOWPOS_CENTERED);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, SDL_WINDOWPOS_CENTERED);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, 1280);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, 720);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_FLAGS_NUMBER,
+                          SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+    tvp_window = SDL_CreateWindowWithProperties(props);
+
+#ifdef _KRKRSDL3_GL
+    // 使用opengl4.3
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-
-    tvp_window = SDL_CreateWindow("TVP Engine",
-                                  SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                  1280, 720,
-                                  SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
-    if (!tvp_window)
-    {
-        SDL_Log("Failed to create window: %s", SDL_GetError());
-        SDL_Quit();
-        return 1;
-    }
-
+#else
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+#endif
     tvp_glContext = SDL_GL_CreateContext(tvp_window);
     if (tvp_glContext == NULL)
+        return SDL_APP_FAILURE;
+    // 使用SDL3上下文
+#if _KRKRSDL3_GL
+    if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress))
+#else
+    if (!gladLoadEGLLoader((GLADloadproc)SDL_GL_GetProcAddress))
+#endif
     {
-        SDL_Log("Failed to create GL context: %s", SDL_GetError());
-        SDL_DestroyWindow(tvp_window);
-        SDL_Quit();
-        return 1;
+        SDL_Log("Failed to initialize GLAD");
+        return SDL_APP_FAILURE;
     }
-
-    // GLEW 初始化
-    glewExperimental = GL_TRUE;
-    GLenum glewErr = glewInit();
-    if (glewErr != GLEW_OK)
-    {
-        SDL_Log("Failed to initialize GLEW: %s", glewGetErrorString(glewErr));
-        SDL_DestroyWindow(tvp_window);
-        SDL_Quit();
-        return 1;
-    }
-
     SDL_GL_MakeCurrent(tvp_window, tvp_glContext);
     SDL_GL_SetSwapInterval(1);
     // GL相关信息初始化
     krkrsdl3::fetchGLInfo();
 
+    // 初始化时不显示
+    SDL_HideWindow(tvp_window);
+    SDL_DestroyProperties(props);
+
     // 启动游戏
     if (argc < 2)
     {
+        // exeName gameNamey
         SDL_Log("At least two parameters are required.");
-        SDL_DestroyWindow(tvp_window);
-        SDL_Quit();
-        return 1;
+        return SDL_APP_FAILURE;
     }
-    try
+    if (!::Application->StartApplication(argc, argv))
     {
-        if (!::Application->StartApplication(argc, argv))
-        {
-            SDL_Log("Game Start Failed.");
-            SDL_DestroyWindow(tvp_window);
-            SDL_Quit();
-            return 1;
-        }
-    }
-    catch (const TJS::eTJSError& e)
-    {
-        SDL_Log("TJS Error: %s", e.GetMessage().AsStdString().c_str());
-        SDL_DestroyWindow(tvp_window);
-        SDL_Quit();
-        return 1;
-    }
-    catch (const TJS::eTJS& e)
-    {
-        SDL_Log("TJS Exception: %s", e.GetMessage().AsStdString().c_str());
-        SDL_DestroyWindow(tvp_window);
-        SDL_Quit();
-        return 1;
-    }
-    catch (const std::exception& e)
-    {
-        SDL_Log("C++ Exception: %s", e.what());
-        SDL_DestroyWindow(tvp_window);
-        SDL_Quit();
-        return 1;
-    }
-    catch (...)
-    {
-        SDL_Log("Unknown exception during startup.");
-        SDL_DestroyWindow(tvp_window);
-        SDL_Quit();
-        return 1;
+        SDL_Log("Game Start Failed.");
+        return SDL_APP_FAILURE;
     }
 
     // 隐藏命令行
@@ -136,187 +99,45 @@ int main(int argc, char* argv[])
 #endif
     SDL_ShowWindow(tvp_window);
 
-    // 初始帧
-    sdl_render_frame();
-    refreshWindow();
+    // 初始帧数
+    SDL_AppIterate(NULL);
 
-    // 主循环
-    bool running = true;
-    try
-    {
-        while (running)
-        {
-            sdl_process_events(running);
-            sdl_render_frame();
-        }
-    }
-    catch (const TJS::eTJSError& e)
-    {
-        SDL_Log("TJS Error in main loop: %s", e.GetMessage().AsStdString().c_str());
-    }
-    catch (const TJS::eTJS& e)
-    {
-        SDL_Log("TJS Exception in main loop: %s", e.GetMessage().AsStdString().c_str());
-    }
-    catch (const std::exception& e)
-    {
-        SDL_Log("C++ Exception in main loop: %s", e.what());
-    }
-    catch (...)
-    {
-        SDL_Log("Unknown exception in main loop.");
-    }
-
-    SDL_DestroyWindow(tvp_window);
-    SDL_Log("Game quit successfully!");
-    SDL_Quit();
-    return 0;
+    return SDL_APP_CONTINUE;
 }
 
-std::map<SDL_Sprite*, callbackOnKeyDownUpEvent> sdl_keyDownCallback;
-std::map<SDL_Sprite*, callbackOnKeyDownUpEvent> sdl_keyUpCallback;
-std::map<SDL_Sprite*, callbackOnMouseDownEvent> sdl_mouseDownCallback;
-std::map<SDL_Sprite*, callbackOnMouseUpEvent> sdl_mouseUpCallback;
-std::map<SDL_Sprite*, callbackOnMouseMoveEvent> sdl_mouseMoveCallback;
-std::map<SDL_Sprite*, callbackOnMouseScroll> sdl_mouseScrollCallback;
-std::mutex sdlCallbackMtx;
-std::vector<SDL_Sprite*> renderTexture;
-std::mutex sdlRenderMtx;
-static SDL_FRect rectBuff;
+#if defined(_KRKRSDL3_WINDOWS) || defined(_KRKRSDL3_LINUX)
 
-static void sdl_process_events(bool& running)
+SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 {
-    SDL_Event event;
-    while (SDL_PollEvent(&event))
-    {
-    switch (event.type)
+    switch (event->type)
     {
             // 退出
-        case SDL_QUIT:
-            running = false;
-            return;
-            // 窗口事件 (SDL2: SDL_WINDOWEVENT + sub-events)
-        case SDL_WINDOWEVENT:
-            break;
+        case SDL_EVENT_QUIT:
+            return SDL_APP_SUCCESS;
             // 键盘事件
-        case SDL_KEYDOWN:
+        case SDL_EVENT_KEY_DOWN:
         {
-            if (event.key.keysym.scancode == SDL_SCANCODE_F1)
+            if (event->key.scancode == SDL_SCANCODE_F1)
             {
                 int x = 0, y = 0;
                 SDL_GetWindowPosition(tvp_window, &x, &y);
                 krkrsdl3::SDL_Invoke_Menu(x, y);
                 break;
             }
-            // 确认键→鼠标模拟 (for KAG [waitclick])
-            if (event.key.keysym.scancode == SDL_SCANCODE_RETURN ||
-                event.key.keysym.scancode == SDL_SCANCODE_SPACE)
-            {
-                int mx, my;
-                SDL_GetMouseState(&mx, &my);
-                std::lock_guard<std::mutex> lock(sdlCallbackMtx);
-                for (auto it = sdl_mouseDownCallback.rbegin(); it != sdl_mouseDownCallback.rend(); ++it)
-                {
-                    auto callback = *it;
-                    if (callback.first->isVisible)
-                    {
-                        callback.second(
-                            mbLeft,
-                            (mx - callback.first->xPos) / callback.first->scale,
-                            (my - callback.first->yPos) / callback.first->scale);
-                        break;
-                    }
-                }
-                break;
-            }
-            std::lock_guard<std::mutex> lock(sdlCallbackMtx);
-            // 检查modal对象
-            bool hasModal = false;
-            for (auto callback : sdl_keyDownCallback)
-            {
-                if (callback.first->type == 1 && callback.first->isVisible)
-                    hasModal = true;
-            }
-            // 写入缓冲区
-            for (auto it = sdl_keyDownCallback.rbegin(); it != sdl_keyDownCallback.rend(); ++it)
-            {
-                auto callback = *it;
-                if (hasModal)
-                {
-                    if (callback.first->type == 1)
-                    {
-                        callback.second(event.key.keysym.scancode);
-                        break;
-                    }
-                }
-                else
-                {
-                    if (callback.first->isVisible)
-                    {
-                        callback.second(event.key.keysym.scancode);
-                    }
-                }
-            }
+
+            krkrsdl3::KRKR_Trig_KeyDown(event->key.scancode);
             break;
         }
-        case SDL_KEYUP:
+        case SDL_EVENT_KEY_UP:
         {
-            // 确认键→鼠标模拟 release
-            if (event.key.keysym.scancode == SDL_SCANCODE_RETURN ||
-                event.key.keysym.scancode == SDL_SCANCODE_SPACE)
-            {
-                int mx, my;
-                SDL_GetMouseState(&mx, &my);
-                std::lock_guard<std::mutex> lock(sdlCallbackMtx);
-                for (auto it = sdl_mouseUpCallback.rbegin(); it != sdl_mouseUpCallback.rend(); ++it)
-                {
-                    auto callback = *it;
-                    if (callback.first->isVisible)
-                    {
-                        callback.second(
-                            mbLeft,
-                            (mx - callback.first->xPos) / callback.first->scale,
-                            (my - callback.first->yPos) / callback.first->scale);
-                        break;
-                    }
-                }
-                break;
-            }
-            std::lock_guard<std::mutex> lock(sdlCallbackMtx);
-            // 检查modal对象
-            bool hasModal = false;
-            for (auto callback : sdl_keyUpCallback)
-            {
-                if (callback.first->type == 1 && callback.first->isVisible)
-                    hasModal = true;
-            }
-            // 写入缓冲区
-            for (auto it = sdl_keyUpCallback.rbegin(); it != sdl_keyUpCallback.rend(); ++it)
-            {
-                auto callback = *it;
-                if (hasModal)
-                {
-                    if (callback.first->type == 1)
-                    {
-                        callback.second(event.key.keysym.scancode);
-                        break;
-                    }
-                }
-                else
-                {
-                    if (callback.first->isVisible)
-                    {
-                        callback.second(event.key.keysym.scancode);
-                    }
-                }
-            }
+            krkrsdl3::KRKR_Trig_KeyUp(event->key.scancode);
             break;
         }
             // 鼠标事件
-        case SDL_MOUSEBUTTONDOWN:
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
         {
             tTVPMouseButton tmp = mbX1;
-            switch (event.button.button)
+            switch (event->button.button)
             {
                 case SDL_BUTTON_RIGHT:
                     tmp = mbRight;
@@ -333,47 +154,18 @@ static void sdl_process_events(bool& running)
 
             if (tmp != mbX1)
             {
-                std::lock_guard<std::mutex> lock(sdlCallbackMtx);
-                // 检查modal对象
-                bool hasModal = false;
-                for (auto callback : sdl_mouseDownCallback)
-                {
-                    if (callback.first->type == 1 && callback.first->isVisible)
-                        hasModal = true;
-                }
-                // 写入缓冲区
-                for (auto it = sdl_mouseDownCallback.rbegin(); it != sdl_mouseDownCallback.rend(); ++it)
-                {
-                    auto callback = *it;
-                    if (hasModal)
-                    {
-                        if (callback.first->type == 1)
-                        {
-                            callback.second(
-                                tmp,
-                                (event.button.x - callback.first->xPos) / callback.first->scale,
-                                (event.button.y - callback.first->yPos) / callback.first->scale);
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        if (callback.first->isVisible)
-                        {
-                            callback.second(
-                                tmp,
-                                (event.button.x - callback.first->xPos) / callback.first->scale,
-                                (event.button.y - callback.first->yPos) / callback.first->scale);
-                        }
-                    }
-                }
+                SDL_Sprite* retSpr = krkrsdl3::KRKR_Get_Current_Sprite();
+                if (retSpr)
+                    krkrsdl3::KRKR_Trig_MouseDown(tmp,
+                                                  (event->button.x - retSpr->xPos) / retSpr->scale,
+                                                  (event->button.y - retSpr->yPos) / retSpr->scale);
             }
             break;
         }
-        case SDL_MOUSEBUTTONUP:
+        case SDL_EVENT_MOUSE_BUTTON_UP:
         {
             tTVPMouseButton tmp = mbX1;
-            switch (event.button.button)
+            switch (event->button.button)
             {
                 case SDL_BUTTON_RIGHT:
                     tmp = mbRight;
@@ -390,126 +182,243 @@ static void sdl_process_events(bool& running)
 
             if (tmp != mbX1)
             {
-                std::lock_guard<std::mutex> lock(sdlCallbackMtx);
-                // 检查modal对象
-                bool hasModal = false;
-                for (auto callback : sdl_mouseUpCallback)
-                {
-                    if (callback.first->type == 1 && callback.first->isVisible)
-                        hasModal = true;
-                }
-                // 写入缓冲区
-                for (auto it = sdl_mouseUpCallback.rbegin(); it != sdl_mouseUpCallback.rend(); ++it)
-                {
-                    auto callback = *it;
-                    if (hasModal)
-                    {
-                        if (callback.first->type == 1)
-                        {
-                            callback.second(
-                                tmp,
-                                (event.button.x - callback.first->xPos) / callback.first->scale,
-                                (event.button.y - callback.first->yPos) / callback.first->scale);
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        if (callback.first->isVisible)
-                        {
-                            callback.second(
-                                tmp,
-                                (event.button.x - callback.first->xPos) / callback.first->scale,
-                                (event.button.y - callback.first->yPos) / callback.first->scale);
-                        }
-                    }
-                }
+                SDL_Sprite* retSpr = krkrsdl3::KRKR_Get_Current_Sprite();
+                if (retSpr)
+                    krkrsdl3::KRKR_Trig_MouseUp(tmp,
+                                                (event->button.x - retSpr->xPos) / retSpr->scale,
+                                                (event->button.y - retSpr->yPos) / retSpr->scale);
             }
             break;
         }
-        case SDL_MOUSEMOTION:
+        case SDL_EVENT_MOUSE_MOTION:
         {
-            std::lock_guard<std::mutex> lock(sdlCallbackMtx);
-            // 检查modal对象
-            bool hasModal = false;
-            for (auto callback : sdl_mouseMoveCallback)
-            {
-                if (callback.first->type == 1 && callback.first->isVisible)
-                    hasModal = true;
-            }
-            // 写入缓冲区
-            for (auto it = sdl_mouseMoveCallback.rbegin(); it != sdl_mouseMoveCallback.rend(); ++it)
-            {
-                auto callback = *it;
-                if (hasModal)
-                {
-                    if (callback.first->type == 1)
-                    {
-                        callback.second(
-                            (event.motion.x - callback.first->xPos) / callback.first->scale,
-                            (event.motion.y - callback.first->yPos) / callback.first->scale);
-                        break;
-                    }
-                }
-                else
-                {
-                    if (callback.first->isVisible)
-                    {
-                        callback.second(
-                            (event.motion.x - callback.first->xPos) / callback.first->scale,
-                            (event.motion.y - callback.first->yPos) / callback.first->scale);
-                    }
-                }
-            }
+            SDL_Sprite* retSpr = krkrsdl3::KRKR_Get_Current_Sprite();
+            if (retSpr)
+                krkrsdl3::KRKR_Trig_MouseMove((event->motion.x - retSpr->xPos) / retSpr->scale,
+                                              (event->motion.y - retSpr->yPos) / retSpr->scale);
             break;
         }
-        case SDL_MOUSEWHEEL:
+        case SDL_EVENT_MOUSE_WHEEL:
         {
-            std::lock_guard<std::mutex> lock(sdlCallbackMtx);
-            // 检查modal对象
-            bool hasModal = false;
-            for (auto callback : sdl_mouseScrollCallback)
-            {
-                if (callback.first->type == 1 && callback.first->isVisible)
-                    hasModal = true;
-            }
-            // 写入缓冲区
-            for (auto it = sdl_mouseScrollCallback.rbegin(); it != sdl_mouseScrollCallback.rend(); ++it)
-            {
-                auto callback = *it;
-                if (hasModal)
-                {
-                    if (callback.first->type == 1)
-                    {
-                        callback.second(event.wheel.x, event.wheel.y, event.wheel.x,
-                                        event.wheel.y);
-                        break;
-                    }
-                }
-                else
-                {
-                    if (callback.first->isVisible)
-                    {
-                        callback.second(event.wheel.x, event.wheel.y, event.wheel.x,
-                                        event.wheel.y);
-                    }
-                }
-            }
+            SDL_Sprite* retSpr = krkrsdl3::KRKR_Get_Current_Sprite();
+            if (retSpr)
+                krkrsdl3::KRKR_Trig_MouseScroll(event->wheel.x, event->wheel.y, event->wheel.x,
+                                                event->wheel.y);
             break;
         }
         default:
-            // 自定义事件 (menu click 等)
-            if (event.type >= SDL_USEREVENT)
-            {
-                krkrsdl3::SDL_Trig_Menu(event.user.data1);
-            }
             break;
     }
-    } // while PollEvent
+    return SDL_APP_CONTINUE;
 }
 
-static const int sdl_drawOrder[] = {0, 2, 1};  // 窗口 -> overlay -> modal
-void sdl_render_frame()
+#elif defined(_KRKRSDL3_ANDROID)
+
+// 安卓专属事件机制
+enum TouchState
+{
+    STATE_IDLE,
+    STATE_SINGLE_FINGER, // 单指状态（处理左键和移动）
+    STATE_MULTI_FINGER,  // 多指状态（处理右键）
+    STATE_MENU
+};
+struct Finger
+{
+    SDL_FingerID id;
+    float x, y;           // 归一化坐标
+    float startX, startY; // 按下时的位置
+    Uint64 downTime;
+    bool active;
+    bool moved;
+
+    Finger() : id(0), x(0), y(0), startX(0), startY(0), downTime(0), active(false), moved(false) {}
+};
+static TouchState _state;
+static std::map<SDL_FingerID, Finger> fingers;
+static float rightClickX, rightClickY;
+static Uint64 rightClickStartTime;
+static const Uint32 RIGHT_CLICK_CONFIRM_DELAY = 150;
+void sendMouseEvent(int button, int eventType, float pX, float pY);
+void sendMouseMotion(float pX, float pY);
+void handleFingerDown(const SDL_TouchFingerEvent& e)
+{
+    Finger f;
+    f.id = e.fingerID;
+    f.x = f.startX = e.x;
+    f.y = f.startY = e.y;
+    f.downTime = SDL_GetTicks();
+    f.active = true;
+    f.moved = false;
+
+    fingers[e.fingerID] = f;
+
+    if (fingers.size() == 1)
+    {
+        // 单击->左键
+        _state = STATE_SINGLE_FINGER;
+    }
+    else if (fingers.size() == 2)
+    {
+        // 双击->右键
+        _state = STATE_MULTI_FINGER;
+    }
+    else
+    {
+        // 三击->菜单
+        _state = STATE_MENU;
+        int windowWidth, windowHeight;
+        SDL_GetWindowSize(tvp_window, &windowWidth, &windowHeight);
+        int pixelX = static_cast<int>(f.x * windowWidth);
+        int pixelY = static_cast<int>(f.y * windowHeight);
+        krkrsdl3::SDL_Invoke_Menu(pixelX, pixelY);
+        fingers.clear();
+        _state = STATE_IDLE;
+    }
+}
+void handleFingerUp(const SDL_TouchFingerEvent& e)
+{
+    auto it = fingers.find(e.fingerID);
+    if (it == fingers.end())
+        return;
+
+    Finger& f = it->second;
+    f.active = false;
+
+    if (fingers.size() == 1)
+    {
+        if (_state == STATE_SINGLE_FINGER)
+        {
+            if (!f.moved)
+                sendMouseEvent(SDL_BUTTON_LEFT, SDL_EVENT_MOUSE_BUTTON_DOWN, f.x, f.y);
+            sendMouseEvent(SDL_BUTTON_LEFT, SDL_EVENT_MOUSE_BUTTON_UP, f.x, f.y);
+        }
+        else if (_state == STATE_MULTI_FINGER)
+        {
+            if (!f.moved)
+                sendMouseEvent(SDL_BUTTON_RIGHT, SDL_EVENT_MOUSE_BUTTON_DOWN, f.x, f.y);
+            sendMouseEvent(SDL_BUTTON_RIGHT, SDL_EVENT_MOUSE_BUTTON_UP, f.x, f.y);
+        }
+        _state = STATE_IDLE;
+    }
+
+    fingers.erase(it);
+}
+void handleFingerMotion(const SDL_TouchFingerEvent& e)
+{
+    auto it = fingers.find(e.fingerID);
+    if (it == fingers.end())
+        return;
+
+    Finger& f = it->second;
+
+    // 检查是否移动
+    float dx = e.x - f.startX;
+    float dy = e.y - f.startY;
+    float moveDist = dx * dx + dy * dy;
+
+    if (moveDist > 0.0001f)
+    { // 移动阈值
+        f.moved = true;
+        f.x = e.x;
+        f.y = e.y;
+
+        if (_state == STATE_SINGLE_FINGER)
+        {
+            // 单指移动，发送鼠标移动
+            sendMouseMotion(f.x, f.y);
+        }
+    }
+}
+
+void sendMouseEvent(int button, int eventType, float pX, float pY)
+{
+    int windowWidth, windowHeight;
+    SDL_GetWindowSize(tvp_window, &windowWidth, &windowHeight);
+    int pixelX = static_cast<int>(pX * windowWidth);
+    int pixelY = static_cast<int>(pY * windowHeight);
+
+    tTVPMouseButton tmp = mbX1;
+    switch (button)
+    {
+        case SDL_BUTTON_RIGHT:
+            tmp = mbRight;
+            break;
+        case SDL_BUTTON_MIDDLE:
+            tmp = mbMiddle;
+            break;
+        case SDL_BUTTON_LEFT:
+            tmp = mbLeft;
+            break;
+        default:
+            break;
+    }
+
+    if (tmp != mbX1)
+    {
+        if (eventType == SDL_EVENT_MOUSE_BUTTON_DOWN)
+        {
+            SDL_Sprite* retSpr = krkrsdl3::KRKR_Get_Current_Sprite();
+            if (retSpr)
+                krkrsdl3::KRKR_Trig_MouseDown(tmp,
+                                              (pixelX - retSpr->xPos) / retSpr->scale,
+                                              (pixelY - retSpr->yPos) / retSpr->scale);
+        }
+        else if (eventType == SDL_EVENT_MOUSE_BUTTON_UP)
+        {
+            SDL_Sprite* retSpr = krkrsdl3::KRKR_Get_Current_Sprite();
+            if (retSpr)
+                krkrsdl3::KRKR_Trig_MouseUp(tmp,
+                                            (pixelX - retSpr->xPos) / retSpr->scale,
+                                            (pixelY - retSpr->yPos) / retSpr->scale);
+        }
+    }
+}
+void sendMouseMotion(float pX, float pY)
+{
+    int windowWidth, windowHeight;
+    SDL_GetWindowSize(tvp_window, &windowWidth, &windowHeight);
+    int pixelX = static_cast<int>(pX * windowWidth);
+    int pixelY = static_cast<int>(pY * windowHeight);
+
+    SDL_Sprite* retSpr = krkrsdl3::KRKR_Get_Current_Sprite();
+    if (retSpr)
+        krkrsdl3::KRKR_Trig_MouseMove((pixelX - retSpr->xPos) / retSpr->scale,
+                                      (pixelY - retSpr->yPos) / retSpr->scale);
+}
+
+SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
+{
+    switch (event->type)
+    {
+        // 退出
+        case SDL_EVENT_QUIT:
+            return SDL_APP_SUCCESS;
+        // 触屏事件
+        case SDL_EVENT_FINGER_DOWN:
+            handleFingerDown(event->tfinger);
+            break;
+        case SDL_EVENT_FINGER_UP:
+            handleFingerUp(event->tfinger);
+            break;
+        case SDL_EVENT_FINGER_MOTION:
+            handleFingerMotion(event->tfinger);
+            break;
+            // 菜单点击
+        case SDL_EVENT_MENU_CLICK:
+            krkrsdl3::SDL_Trig_Menu(event->user.data1);
+            break;
+        default:
+            break;
+    }
+    return SDL_APP_CONTINUE;
+}
+
+#endif
+
+std::vector<SDL_Sprite*> renderTexture;
+static SDL_FRect rectBuff;
+
+SDL_AppResult SDL_AppIterate(void* appstate)
 {
     ::Application->Run();
     iTVPTexture2D::RecycleProcess();
@@ -519,21 +428,34 @@ void sdl_render_frame()
     SDL_GetWindowSize(tvp_window, &RW, &RH);
     krkrsdl3::SDL_GL_BaseSet(RW, RH);
     {
-        std::lock_guard<std::mutex> lock(sdlRenderMtx);
-        for (int type : sdl_drawOrder)
+        // 绘制currentSprite
+        SDL_Sprite* retSpr = krkrsdl3::KRKR_Get_Current_Sprite();
+        if (retSpr) krkrsdl3::SDL_GL_DrawTexture(retSpr, RW, RH);
+
+        // 绘制overlay
+        for (auto texture : renderTexture)
         {
-            for (int i = renderTexture.size() - 1; i >= 0; --i)
+            if (texture->isVisible && texture->type == 2)
             {
-                auto texture = renderTexture[i];
-                if (texture->isVisible && texture->type == type)
-                {
-                    krkrsdl3::SDL_GL_DrawTexture(texture, RW, RH);
-                }
+                krkrsdl3::SDL_GL_DrawTexture(texture, RW, RH);
             }
         }
     }
     // 渲染
     SDL_GL_SwapWindow(tvp_window);
+
+    return SDL_APP_CONTINUE;
 }
 
-// (SDL_Fail / SDL_AppQuit removed — cleanup is in main())
+SDL_AppResult SDL_Fail()
+{
+    SDL_LogError(SDL_LOG_CATEGORY_CUSTOM, "Error %s", SDL_GetError());
+    return SDL_APP_FAILURE;
+}
+
+void SDL_AppQuit(void* appstate, SDL_AppResult result)
+{
+    SDL_DestroyWindow(tvp_window);
+    SDL_Log("Game quit successfully!");
+    SDL_Quit();
+}

@@ -17,7 +17,6 @@
 
 extern std::thread::id TVPMainThreadID;
 extern std::vector<SDL_Sprite*> renderTexture;
-extern std::mutex sdlRenderMtx;
 
 namespace krkrsdl3
 {

@@ -57,6 +57,7 @@ set(KRKRSDL_SRC
     ${KRKRSDL_CORE_SRC}
     ${KRKRSDL_ENVIRON_SRC}
     ${KRKRSDL_PLUGINS_SRC}
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/krkrsdl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/krkrsdl_gl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/krkrsdl_menu.cpp
     )
@@ -65,24 +66,11 @@ set(KRKRSDL_SRC
 # 3. 确定目标文件
 #
 
-# 可执行文件 / 共享库
-if(OHOS)
-    add_library(${PROJECT_NAME} SHARED
-        ${CMAKE_CURRENT_SOURCE_DIR}/cpp/krkrsdl_harmony.cpp
-        ${KRKRSDL_SRC})
-    set_target_properties(${PROJECT_NAME} PROPERTIES
-        OUTPUT_NAME "krkr2"
-        BUILD_RPATH "$ORIGIN"
-        INSTALL_RPATH "$ORIGIN"
-    )
-elseif(ANDROID)
-    add_library(${PROJECT_NAME} SHARED
-	    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/krkrsdl_android.cpp
-		${KRKRSDL_SRC})
+# 可执行文件
+if(ANDROID)
+    add_library(${PROJECT_NAME} SHARED ${KRKRSDL_SRC})
 elseif(LINUX OR WIN32)
-    add_executable(${PROJECT_NAME}
-	    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/krkrsdl.cpp
-		${KRKRSDL_SRC})
+    add_executable(${PROJECT_NAME} ${KRKRSDL_SRC})
 else()
     message(FATAL_ERROR "unsupported: ${CMAKE_SYSTEM_NAME}")
 endif()

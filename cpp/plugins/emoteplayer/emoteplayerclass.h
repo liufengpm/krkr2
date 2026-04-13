@@ -185,6 +185,12 @@ public:
     tTJSVariant getVariableFrameList(tTJSString name);
     tTJSVariant getCommandList();
     tTJSVariant getLayerGetter(tTJSString name);
+    void setFlip(bool isFlip);
+    void setSlant(tjs_real x, tjs_real y);
+    void setZoom(tjs_real x, tjs_real y);
+
+protected:
+    bool isMotion = false;
 
 private:
     // runtime
@@ -232,7 +238,7 @@ private:
 class Player : public EmotePlayer
 {
 public:
-    Player(ResourceManager* resourceManager) : EmotePlayer(resourceManager) {}
+    Player(ResourceManager* resourceManager) : EmotePlayer(resourceManager) { isMotion = true; }
 
     using EmotePlayer::assign;
     using EmotePlayer::draw;
@@ -265,5 +271,10 @@ public:
     using EmotePlayer::stopTimeline;
     using EmotePlayer::stopWind;
     using EmotePlayer::unserialize;
+    using EmotePlayer::getCommandList;
+    using EmotePlayer::getLayerGetter;
+    using EmotePlayer::setFlip;
+    using EmotePlayer::setSlant;
+    using EmotePlayer::setZoom;
 };
 }; // namespace emoteplayer
